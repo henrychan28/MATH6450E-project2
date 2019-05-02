@@ -3,7 +3,7 @@ import time, sys
 import math
 import random
 import pickle
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
+os.environ["CUDA_VISIBLE_DEVICES"]="3"
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID" 
 
 import tensorflow as tf
@@ -208,12 +208,14 @@ eval_x = eval_x/np.float32(255)
 x_min = (0-0.1307)/0.3081
 x_max = (1-0.1307)/0.3081
 
-sample_idx = random.randrange(0, eval_x.shape[0])
+#sample_idx = random.randrange(0, eval_x.shape[0])
+sample_idx = 8215
 sample_x, sample_y = eval_x[sample_idx], eval_y[sample_idx]
 
 result_dict['sample_idx'] = sample_idx
 
-sigmas = [0.5, 0.8, 1.1, 1.4]
+#sigmas = [0.8, 1.1, 1.4]
+sigmas = [0.95, 1.25]
 M = [100, 250]
 
 #Naive MC
@@ -237,47 +239,47 @@ for sigma in sigmas:
     result_dict['naive'][sigma] = log_i
 
 
-#Naive AMLS
+#AMLS
 result_dict['AMLS'] = dict()
 for sigma in sigmas:
     for m in M:
-        sample_size = 1000
-        perturbated_samples, prior = uniform_perturbation(sample_x, x_min, x_max, n=sample_size, sigma=sigma)
-        perturbated_labels = np.repeat(sample_y, sample_size)
-        quantile = 0.1
-        log_p_min = -250
-        l_k = float('-inf')
-        l_prev = float('-inf')
-        log_i = 0
-        k = 0
-        width_proposal = sigma*torch.ones(sample_size)/30
-
-        tf.reset_default_graph()
         log_i_record = []
-        with tf.Session() as sess:
-            inputs, labels, logits, loss = evaluation_model(get_default_hparams(), sess=sess)
-            while l_k < 0:
-                loss_run_time, logits_run_time = sess.run([loss, logits], feed_dict={inputs: perturbated_samples, labels: perturbated_labels})
-                accuracy = 100 * np.sum(np.argmax(logits_run_time, axis=1) == perturbated_labels) / perturbated_labels.shape[0]
-                s_xn = compute_property_function(logits_run_time, perturbated_labels)
-                l_k = min(0, np.quantile(s_xn, quantile, interpolation='lower'))
-                if l_k == l_prev:
-                    break
-                l_prev = l_k
-                p_k = np.where(s_xn>= l_k)[0].shape[0] / sample_size
-                log_i += math.log(p_k)
-                if log_i < log_p_min:
-                    break
-                perturbated_samples = perturbated_samples[s_xn>=l_k]
-                s_xn = s_xn[s_xn>=l_k]
-                resample_idx = np.random.choice(s_xn.shape[0], sample_size)
-                perturbated_samples = perturbated_samples[resample_idx]
-                s_xn = s_xn[resample_idx]
-                logits_run_time = logits_run_time[resample_idx]
-                perturbated_samples, width_proposal = mh_update(perturbated_samples, perturbated_labels, width_proposal, prior, 
-                                                                l_k, inputs, labels, update_steps=m, sess=sess)
-              
-        result_dict['AMLS'][(sigma, m)] = l_k
+        for i in range(10):
+            sample_size = 1000
+            perturbated_samples, prior = uniform_perturbation(sample_x, x_min, x_max, n=sample_size, sigma=sigma)
+            perturbated_labels = np.repeat(sample_y, sample_size)
+            quantile = 0.1
+            log_p_min = -250
+            l_k = float('-inf')
+            l_prev = float('-inf')
+            log_i = 0
+            k = 0
+            width_proposal = sigma*torch.ones(sample_size)/30
+
+            tf.reset_default_graph()
+            with tf.Session() as sess:
+                inputs, labels, logits, loss = evaluation_model(get_default_hparams(), sess=sess)
+                while l_k < 0:
+                    loss_run_time, logits_run_time = sess.run([loss, logits], feed_dict={inputs: perturbated_samples, labels: perturbated_labels})
+                    accuracy = 100 * np.sum(np.argmax(logits_run_time, axis=1) == perturbated_labels) / perturbated_labels.shape[0]
+                    s_xn = compute_property_function(logits_run_time, perturbated_labels)
+                    l_k = min(0, np.quantile(s_xn, quantile, interpolation='lower'))
+                    p_k = np.where(s_xn>= l_k)[0].shape[0] / sample_size
+                    log_i += math.log(p_k)
+                    if log_i < log_p_min:
+                        break
+                    perturbated_samples = perturbated_samples[s_xn>=l_k]
+                    s_xn = s_xn[s_xn>=l_k]
+                    resample_idx = np.random.choice(s_xn.shape[0], sample_size)
+                    perturbated_samples = perturbated_samples[resample_idx]
+                    s_xn = s_xn[resample_idx]
+                    logits_run_time = logits_run_time[resample_idx]
+                    perturbated_samples, width_proposal = mh_update(perturbated_samples, perturbated_labels, width_proposal, prior, 
+                                                                    l_k, inputs, labels, update_steps=m, sess=sess)
+                    
+            log_i_record += [log_i]
+            print("log_i: {0} | l_k: {1} | (sigma, m): {2}".format(log_i, l_k, (sigma, m)))
+        result_dict['AMLS'][(sigma, m)] = log_i_record
 
 with open('./result.pkl', 'wb') as f:
     pickle.dump(result_dict, f)
